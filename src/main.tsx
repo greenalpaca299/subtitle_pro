@@ -165,6 +165,7 @@ const MainApp = () => {
   const [asrPrompt, setAsrPrompt] = useState('')
   const [transEngine, setTransEngine] = useState('ollama')
   const [transModel, setTransModel] = useState('translategemma:12b')
+  const [transPrompt, setTransPrompt] = useState('')
   const [ollamaModels, setOllamaModels] = useState<string[]>([]) 
   const [apiUrl, setApiUrl] = useState('http://localhost:11434/v1') 
   const [apiKey, setApiKey] = useState('')
@@ -239,6 +240,7 @@ const MainApp = () => {
           formData.append('asr_prompt', asrPrompt)
           formData.append('trans_engine', transEngine)
           formData.append('trans_model', transModel)
+          formData.append('trans_prompt', transPrompt)
           formData.append('api_url', apiUrl)
           formData.append('api_key', apiKey)
 
@@ -273,13 +275,22 @@ const MainApp = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    
+    // 重置输入框，确保下一次选择相同文件也能触发
+    const target = e.target;
+    const cleanupInput = () => { target.value = ''; };
+
     const taskId = Math.random().toString(36).substring(7)
     setIsOfflineProcessing(true)
     setProgress(0)
-    setOfflineStatus('正在处理，请稍候...')
+    setProgressStatus('正在初始化...')
+    setOfflineStatus('')
 
+    // @ts-ignore
+    const originalPath = file.path || ''
     const formData = new FormData()
     formData.append('file', file)
+    // ... 其他参数保持不变 ...
     formData.append('source_lang', sourceLang)
     formData.append('target_lang', targetLang)
     formData.append('is_translate', String(isTranslate))
@@ -288,9 +299,11 @@ const MainApp = () => {
     formData.append('asr_prompt', asrPrompt)
     formData.append('trans_engine', transEngine)
     formData.append('trans_model', transModel)
+    formData.append('trans_prompt', transPrompt)
     formData.append('api_url', apiUrl)
     formData.append('api_key', apiKey)
     formData.append('task_id', taskId)
+    if (originalPath) formData.append('original_path', originalPath)
 
     const poller = setInterval(async () => {
       try {
@@ -307,22 +320,38 @@ const MainApp = () => {
       const data = await res.json()
       clearInterval(poller)
       setIsOfflineProcessing(false)
+      cleanupInput()
+
       if (data.status === 'success') {
         setOfflineStatus(
-          <div className="flex flex-col items-center gap-2">
+          <div className="flex flex-col items-center gap-2 relative z-50">
             <span className="text-emerald-600 font-black">处理完成！</span>
-            <a 
-              href={`http://127.0.0.1:8000${data.download_url}`} 
-              target="_blank" 
-              className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-xs font-bold"
-            >
-              下载 SRT 字幕
-            </a>
+            <p className="text-[10px] text-slate-500">字幕已尝试放置到原视频目录</p>
+            <div className="flex gap-2">
+              <a 
+                href={`http://127.0.0.1:8000${data.download_url}`} 
+                target="_blank" 
+                className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors text-xs font-bold"
+              >
+                下载 SRT (备用)
+              </a>
+              <button 
+                onClick={() => setOfflineStatus('')}
+                className="px-4 py-1.5 bg-slate-200 text-slate-600 rounded-lg hover:bg-slate-300 transition-colors text-xs font-bold"
+              >
+                再转一部
+              </button>
+            </div>
           </div>
         )
         setText(data.full_text)
       } else { setOfflineStatus('处理失败: ' + data.message) }
-    } catch (e) { clearInterval(poller); setIsOfflineProcessing(false); setOfflineStatus('网络错误'); }
+    } catch (e) { 
+      clearInterval(poller); 
+      setIsOfflineProcessing(false); 
+      setOfflineStatus('网络错误'); 
+      cleanupInput();
+    }
   }
 
   return (
@@ -403,21 +432,66 @@ const MainApp = () => {
                       </select>
                    </div>
                    {isTranslate && (
-                    <div className="flex items-center gap-2">
-                        <p className="text-[10px] font-black text-slate-400 uppercase w-16">翻译引擎</p>
-                        <select 
-                          value={transEngine} 
-                          onChange={e => {
-                            setTransEngine(e.target.value)
-                            if (e.target.value === 'ollama') setTransModel('translategemma:12b')
-                          }} 
-                          className="flex-1 bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold focus:outline-none"
-                        >
-                          <option value="google">Google</option>
-                          <option value="ollama">Ollama (本地)</option>
-                          <option value="openai">OpenAI API</option>
-                        </select>
-                    </div>
+                    <>
+                      <div className="flex items-center gap-2">
+                          <p className="text-[10px] font-black text-slate-400 uppercase w-16">翻译引擎</p>
+                          <select 
+                            value={transEngine} 
+                            onChange={(e) => {
+                              setTransEngine(e.target.value)
+                              if (e.target.value === 'ollama') {
+                                setTransModel('translategemma:12b')
+                                setApiUrl('http://localhost:11434/v1')
+                              } else if (e.target.value === 'openai') {
+                                setApiUrl('https://api.openai.com/v1')
+                              }
+                            }} 
+                            className="flex-1 bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold focus:outline-none"
+                          >
+                            <option value="google">Google</option>
+                            <option value="local_nllb">NLLB (本地离线)</option>
+                            <option value="ollama">Ollama (本地)</option>
+                            <option value="openai">OpenAI API</option>
+                          </select>
+                      </div>
+
+                      {(transEngine === 'ollama' || transEngine === 'openai' || asrEngine === 'openai') && (
+                        <div className="space-y-3 mt-2 p-3 bg-slate-50/50 rounded-2xl border border-slate-100">
+                          <div className="space-y-1">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">API URL</p>
+                            <input 
+                              type="text" 
+                              value={apiUrl} 
+                              onChange={(e) => setApiUrl(e.target.value)} 
+                              placeholder="API 地址..." 
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20" 
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">API KEY</p>
+                            <input 
+                              type="password" 
+                              value={apiKey} 
+                              onChange={(e) => setApiKey(e.target.value)} 
+                              placeholder="API 密钥..." 
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20" 
+                            />
+                          </div>
+                          {(transEngine === 'ollama' || transEngine === 'openai') && (
+                            <div className="space-y-1">
+                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">翻译提示词 (Optional)</p>
+                              <textarea 
+                                value={transPrompt} 
+                                onChange={(e) => setTransPrompt(e.target.value)} 
+                                placeholder="引导翻译风格..." 
+                                rows={2}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none" 
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
                    )}
                 </div>
               </div>

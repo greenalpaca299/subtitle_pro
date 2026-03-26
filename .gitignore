@@ -1,3 +1,2 @@
-./node_modules/
-dist/
-*.exe
+node_modules/*
+python_engine/models/*
